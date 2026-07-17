@@ -9,6 +9,6 @@ SEC_ARCHIVES_BASE_URL = "https://www.sec.gov/Archives/edgar/data"
 
 USER_AGENT = "FinSight/0.1 yadavjatin2006@gmail.com"
 
-REQUEST_TIMEOUT_SECONDS = 10
+REQUEST_TIMEOUT_SECONDS = 30
 
 CIK_PADDING = 10
