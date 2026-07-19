@@ -22,7 +22,14 @@ TITLE_KEYWORDS = {
     "Item 7A": "quantitativeandqualitative",
     "Item 8": "financialstatements",
 }
+from src.models import SectionID
 
+SECTION_DEFINITIONS = [
+    ("Item 1", SectionID.ITEM_1, "Business"),
+    ("Item 1A", SectionID.ITEM_1A, "Risk Factors"),
+    ("Item 7", SectionID.ITEM_7, "Management's Discussion and Analysis"),
+    ("Item 8", SectionID.ITEM_8, "Financial Statements"),
+]
 ITEM_PATTERNS = {
     "Item 1": re.compile(r"Item\s+1(?![0-9A-Za-z])", re.IGNORECASE),
     "Item 1A": re.compile(r"Item\s+1A(?![0-9A-Za-z])", re.IGNORECASE),
@@ -162,5 +169,82 @@ class SectionExtractor:
 
         return boundaries
 
-    def _build_sections(self, document: CleanDocument, boundaries) -> list[Section]:
-        raise NotImplementedError
+    def _build_section(
+        self,
+        document: CleanDocument,
+        section_id: SectionID,
+        section_name: str,
+        char_start: int,
+        char_end: int,
+    ) -> Section:
+        """
+        Construct a Section domain object from a character range.
+        """
+        return Section(
+            company_ticker=document.company_ticker,
+            company_name=document.company_name,
+            filing_year=document.filing_year,
+            filing_type=document.filing_type,
+            section_id=section_id,
+            section_name=section_name,
+            text=document.clean_text[char_start:char_end].lstrip(" .:"),
+            char_start=char_start,
+            char_end=char_end,
+        )
+    def _build_sections(
+        self,
+        document: CleanDocument,
+        boundaries: dict[str, HeadingCandidate],
+    ) -> list[Section]:
+        """
+        Slice the cleaned filing into the supported SEC sections.
+        """
+        sections: list[Section] = []
+
+        item1 = boundaries["Item 1"]
+        item1a = boundaries["Item 1A"]
+        item7 = boundaries["Item 7"]
+        item7a = boundaries["Item 7A"]
+        item8 = boundaries["Item 8"]
+
+        sections.append(
+            self._build_section(
+                document,
+                SectionID.ITEM_1,
+                "Business",
+                item1.end,
+                item1a.start,
+            )
+        )
+
+        sections.append(
+            self._build_section(
+                document,
+                SectionID.ITEM_1A,
+                "Risk Factors",
+                item1a.end,
+                item7.start,
+            )
+        )
+
+        sections.append(
+            self._build_section(
+                document,
+                SectionID.ITEM_7,
+                "Management's Discussion and Analysis",
+                item7.end,
+                item7a.start,
+            )
+        )
+
+        sections.append(
+            self._build_section(
+                document,
+                SectionID.ITEM_8,
+                "Financial Statements",
+                item8.end,
+                len(document.clean_text),
+            )
+        )
+
+        return sections
