@@ -170,16 +170,21 @@ class SectionExtractor:
         return boundaries
 
     def _build_section(
-        self,
-        document: CleanDocument,
-        section_id: SectionID,
-        section_name: str,
-        char_start: int,
-        char_end: int,
+        self, document: CleanDocument, section_id: SectionID,
+        section_name: str, char_start: int, char_end: int,
     ) -> Section:
-        """
-        Construct a Section domain object from a character range.
-        """
+        raw_text = document.clean_text[char_start:char_end]
+        stripped_text = raw_text.strip(" .:")
+
+        # Adjust offsets to match the stripped text exactly, so
+        # document.clean_text[char_start:char_end] == text holds as a real
+        # invariant. This matters now because Chunker computes every chunk's
+        # absolute offset by adding section.char_start to a section-relative
+        # position -- if this drifts, every chunk built from this section
+        # inherits the same drift silently.
+        leading_stripped = len(raw_text) - len(raw_text.lstrip(" .:"))
+        trailing_stripped = len(raw_text) - len(raw_text.rstrip(" .:"))
+
         return Section(
             company_ticker=document.company_ticker,
             company_name=document.company_name,
@@ -187,9 +192,9 @@ class SectionExtractor:
             filing_type=document.filing_type,
             section_id=section_id,
             section_name=section_name,
-            text=document.clean_text[char_start:char_end].lstrip(" .:"),
-            char_start=char_start,
-            char_end=char_end,
+            text=stripped_text,
+            char_start=char_start + leading_stripped,
+            char_end=char_end - trailing_stripped,
         )
     def _build_sections(
         self,
