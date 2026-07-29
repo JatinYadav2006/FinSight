@@ -5,6 +5,7 @@ Splits SEC filing sections into token-budgeted, sentence-aware chunks.
 import pysbd
 import tiktoken
 
+from dataclasses import dataclass
 from src.models import Section
 
 
@@ -18,6 +19,16 @@ TOKENIZER = tiktoken.encoding_for_model("gpt-4o-mini")
 
 SENTENCE_SEGMENTER = pysbd.Segmenter(language="en", clean=False)
 
+@dataclass(frozen=True)
+class _PositionedSentence:
+    """
+    Internal representation of a sentence together with its exact
+    character offsets within section.text.
+    """
+
+    text: str
+    start: int
+    end: int
 
 class Chunker:
     """
@@ -29,7 +40,7 @@ class Chunker:
         chunks = chunker.chunk(section)
     """
 
-    def chunk(self, section: Section) -> list[str]:
+    def chunk(self, section: Section):
         raise NotImplementedError
 
     def _split_into_sentences(self, text: str) -> list[str]:
@@ -57,75 +68,103 @@ class Chunker:
                 f"reconstructed length: {len(reconstructed)}."
             )
 
+    def _position_sentences(
+        self,
+        sentences: list[str],
+    ) -> list[_PositionedSentence]:
+        """
+        Attach exact character offsets to each sentence using a running cursor.
+
+        Because sentence reconstruction has already been verified,
+        sentences form a contiguous partition of the original text.
+        """
+
+        positioned = []
+        cursor = 0
+
+        for sentence in sentences:
+            end = cursor + len(sentence)
+
+            positioned.append(
+                _PositionedSentence(
+                    text=sentence,
+                    start=cursor,
+                    end=end,
+                )
+            )
+
+            cursor = end
+
+        return positioned
+
     def _count_tokens(self, text: str) -> int:
         return len(TOKENIZER.encode(text))
 
-    def _split_oversized_sentence(self, sentence: str) -> list[str]:
+    def _split_oversized_sentence(
+        self, sentence: _PositionedSentence
+    ) -> list[_PositionedSentence]:
         """
-        Some pysbd "sentences" aren't prose -- flattened financial tables
-        or exhibit lists with no internal punctuation, sometimes 1000+
-        tokens. Split by token windows rather than forcing an oversized
-        chunk or truncating financial data.
+        Split an oversized "sentence" (flattened table/exhibit list) into
+        token windows, with the same overlap step as normal chunks.
 
-        Uses the same step (TARGET_TOKENS - OVERLAP_TOKENS) as normal
-        chunk boundaries, so windows within an oversized sentence overlap
-        exactly as much as chunks elsewhere in the pipeline do -- no
-        special case where overlap silently disappears just because the
-        source happened to be one giant "sentence" instead of several
-        normal ones.
+        Offsets must be derived by decoding the cumulative token prefix at
+        each window boundary -- NOT by assuming a fixed characters-per-token
+        ratio. Tokens don't map 1:1 to characters, so window i's character
+        start is len(decode(token_ids[:i])), not i * (avg chars per token).
+        Getting this wrong would silently misplace every chunk built from an
+        oversized sentence.
         """
-        token_ids = TOKENIZER.encode(sentence)
+        token_ids = TOKENIZER.encode(sentence.text)
         step = TARGET_TOKENS - OVERLAP_TOKENS
-        return [
-            TOKENIZER.decode(token_ids[i:i + TARGET_TOKENS])
-            for i in range(0, len(token_ids), step)
-        ]
 
-    def _carry_overlap(self, previous_group: list[str]) -> tuple[list[str], int]:
-        """
-        Build the start of the next group from the tail of the previous one,
-        walking backward until ~OVERLAP_TOKENS worth of sentences are covered.
+        windows = []
+        for i in range(0, len(token_ids), step):
+            window_ids = token_ids[i : i + TARGET_TOKENS]
+            window_text = TOKENIZER.decode(window_ids)
+            prefix_char_length = len(TOKENIZER.decode(token_ids[:i]))
 
-        Guards against unbounded duplication: once overlap already contains
-        at least one sentence, a candidate sentence that alone exceeds
-        OVERLAP_TOKENS is NOT added -- doing so would mean sweeping an
-        oversized, unrelated sentence into "overlap" just because the trailing
-        sentences of the previous group were too short to reach the target on
-        their own (observed on AAPL Financial Statements: a 258-token group
-        of three short sentences caused the entire group, including a
-        241-token heading sentence, to be duplicated forward, overflowing the
-        next chunk to 641 tokens). The first candidate is always included even
-        if it alone exceeds OVERLAP_TOKENS -- overlap should never be empty,
-        and a single oversized sentence at the tail is a legitimate, bounded
-        case (unlike sweeping in an unrelated large sentence further back).
+            window_start = sentence.start + prefix_char_length
+            windows.append(
+                _PositionedSentence(
+                    text=window_text,
+                    start=window_start,
+                    end=window_start + len(window_text),
+                )
+            )
+        return windows
+
+    def _carry_overlap(
+        self, previous_group: list[_PositionedSentence]
+    ) -> tuple[list[_PositionedSentence], int]:
         """
-        overlap: list[str] = []
+        Walk backward from the previous group's tail until ~OVERLAP_TOKENS
+        is covered. Capped: once overlap is non-empty, a candidate sentence
+        larger than OVERLAP_TOKENS on its own is not added -- prevents an
+        oversized sentence sitting earlier in the group from being swept in
+        wholesale just because trailing sentences were too short to reach
+        the target alone.
+        """
+        overlap: list[_PositionedSentence] = []
         overlap_tokens = 0
         for sentence in reversed(previous_group):
-            sentence_tokens = self._count_tokens(sentence)
-
-            if overlap and overlap_tokens + sentence_tokens > OVERLAP_TOKENS:
+            sentence_tokens = self._count_tokens(sentence.text)
+            if overlap and sentence_tokens > OVERLAP_TOKENS:
                 break
-
             overlap.insert(0, sentence)
             overlap_tokens += sentence_tokens
-
             if overlap_tokens >= OVERLAP_TOKENS:
                 break
         return overlap, overlap_tokens
 
-    def _group_sentences(self, sentences: list[str]) -> list[list[str]]:
-        """
-        Accumulate sentences into token-budgeted groups with sentence-level
-        overlap carried into the next group. An oversized single sentence
-        is emitted as its own group(s) via _split_oversized_sentence.
-        """
-        groups: list[list[str]] = []
-        current: list[str] = []
+    def _group_sentences(
+        self, sentences: list[_PositionedSentence]
+    ) -> list[list[_PositionedSentence]]:
+        groups: list[list[_PositionedSentence]] = []
+        current: list[_PositionedSentence] = []
         current_tokens = 0
 
         for sentence in sentences:
-            sentence_tokens = self._count_tokens(sentence)
+            sentence_tokens = self._count_tokens(sentence.text)
 
             if sentence_tokens > TARGET_TOKENS:
                 if current:
@@ -137,11 +176,10 @@ class Chunker:
 
             if current and current_tokens + sentence_tokens > TARGET_TOKENS:
                 groups.append(current)
+
                 current, current_tokens = self._carry_overlap(current)
 
-                # If the overlap itself leaves no room for the incoming sentence,
-                # drop the overlap for this boundary rather than exceeding the
-                # maximum chunk size.
+                # Keep this! Prevents reintroducing the MSFT overflow bug.
                 if current_tokens + sentence_tokens > TARGET_TOKENS:
                     current = []
                     current_tokens = 0

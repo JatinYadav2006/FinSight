@@ -60,6 +60,34 @@ class Section:
     char_start: int
     char_end: int
 
+@dataclass(frozen=True)
+class Chunk:
+    """
+    A retrievable unit of text from a Section.
+
+    Chunks preserve provenance back to the original SEC filing,
+    allowing retrieval, citation, and exact source reconstruction.
+    """
+
+    id: str
+
+    company_ticker: str
+    company_name: str
+    filing_year: int
+    filing_type: str
+
+    section_id: SectionID
+    section_name: str
+
+    text: str
+
+    char_start: int
+    char_end: int
+
+    token_count: int
+
+    chunk_index: int
+    total_chunks: int
 
 @dataclass(frozen=True)
 class ChunkMetadata:
