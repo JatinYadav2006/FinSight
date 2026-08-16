@@ -2,3 +2,4 @@ beautifulsoup4
 requests
 pysbd
 tiktoken
+rank-bm25
