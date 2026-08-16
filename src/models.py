@@ -109,17 +109,6 @@ class ChunkMetadata:
     char_start: int
     char_end: int
 
-
-@dataclass(frozen=True)
-class Chunk:
-    """
-    Represents a retrievable unit of knowledge from an SEC filing.
-    """
-
-    text: str
-    metadata: ChunkMetadata
-
-
 @dataclass(frozen=True)
 class RetrievedChunk:
     """

@@ -6,7 +6,7 @@ import pysbd
 import tiktoken
 
 from dataclasses import dataclass
-from src.models import Section
+from src.models import Section, Chunk
 
 
 TARGET_TOKENS = 512
@@ -40,8 +40,13 @@ class Chunker:
         chunks = chunker.chunk(section)
     """
 
-    def chunk(self, section: Section):
-        raise NotImplementedError
+    def chunk(self, section: Section) -> list[Chunk]:
+        """Public API: split a Section into token-budgeted, overlapping Chunks."""
+        sentences = self._split_into_sentences(section.text)
+        self._verify_reconstruction(section.text, sentences)
+        positioned = self._position_sentences(sentences)
+        groups = self._group_sentences(positioned)
+        return self._build_chunks(section, groups)
 
     def _split_into_sentences(self, text: str) -> list[str]:
         """
@@ -78,8 +83,7 @@ class Chunker:
         Because sentence reconstruction has already been verified,
         sentences form a contiguous partition of the original text.
         """
-
-        positioned = []
+        positioned: list[_PositionedSentence] = []
         cursor = 0
 
         for sentence in sentences:
@@ -192,5 +196,46 @@ class Chunker:
 
         return groups
 
-    def _build_chunks(self, section: Section, sentence_groups: list[list[str]]):
-        raise NotImplementedError  # pending Chunk/ChunkMetadata field confirmation
+    def _build_chunks(
+        self,
+        section: Section,
+        groups: list[list[_PositionedSentence]],
+    ) -> list[Chunk]:
+        """
+        Convert grouped, positioned sentences into Chunk objects.
+
+        Sentence positions are relative to section.text, so absolute
+        document offsets are obtained by adding section.char_start.
+        """
+        total_chunks = len(groups)
+        chunks: list[Chunk] = []
+
+        for index, group in enumerate(groups):
+            text = "".join(sentence.text for sentence in group)
+
+            chunk_id = (
+                f"{section.company_ticker}_"
+                f"{section.filing_year}_"
+                f"{section.section_id.value}_"
+                f"{index:03d}"
+            )
+
+            chunks.append(
+                Chunk(
+                    id=chunk_id,
+                    company_ticker=section.company_ticker,
+                    company_name=section.company_name,
+                    filing_year=section.filing_year,
+                    filing_type=section.filing_type,
+                    section_id=section.section_id,
+                    section_name=section.section_name,
+                    text=text,
+                    char_start=section.char_start + group[0].start,
+                    char_end=section.char_start + group[-1].end,
+                    token_count=self._count_tokens(text),
+                    chunk_index=index,
+                    total_chunks=total_chunks,
+                )
+            )
+
+        return chunks
