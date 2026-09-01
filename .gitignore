@@ -41,3 +41,5 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+data/chroma/
