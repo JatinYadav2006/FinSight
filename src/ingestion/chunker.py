@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from src.models import Section, Chunk
 
 
-TARGET_TOKENS = 512
+TARGET_TOKENS = 448
 OVERLAP_TOKENS = 64
 
 # gpt-4o-mini uses o200k_base -- verified against tiktoken's own model

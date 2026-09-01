@@ -3,3 +3,6 @@ requests
 pysbd
 tiktoken
 rank-bm25
+openai
+sentence-transformers
+transformers
